@@ -1,15 +1,16 @@
 import numpy as np
 from scipy.integrate import quad
+from .base import AbstractTol
+from ..engine.backend import xp
 
-class GeometricTol:
+class GeometricTol(AbstractTol):
     """Handles GD&T geometric tolerances using numerical integration for arbitrary distributions."""
 
     def __init__(self, tol_type, spec=None, **kwargs):
+        super().__init__(kwargs.get('name', f"GD&T_{tol_type.lower()}"))
         self.tol_type = tol_type.lower()
         self.spec = spec
-        self.name = kwargs.get('name', f"GD&T_{self.tol_type}")
         self.unit_vector = np.array([0., 0., 0.]) # GD&T result is scalar magnitude
-        self.ignore_variation = False
 
         if self.tol_type in ['concentricity', 'position']:
             self._build_radial_tol(**kwargs)

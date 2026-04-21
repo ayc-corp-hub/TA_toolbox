@@ -1,52 +1,66 @@
 import numpy as np
 import pandas as pd
-from .dimension import DimensionTol
-from .rotation import RotationTol
-from .utils import parse_direction
+from ..utils.math_utils import parse_direction
+from .base import AbstractTol
+from ..engine.simulation import run_monte_carlo
+from ..utils.reporter import generate_dataframe
+
+def calculate_loop(components):
+    """Calculates the 3D loop sum for nominal verification."""
+    gap_vector = np.zeros(3)
+    for dim in components:
+        gap_vector += dim.nominal_vector
+    return gap_vector
 
 class ToleranceChain:
     def __init__(self, name="Master_Chain"):
         self.name = name
-        self.dimensions = []
+        self.components = []
+
+    def __iadd__(self, other):
+        if isinstance(other, AbstractTol):
+            self.components.append(other)
+        elif isinstance(other, ToleranceChain):
+            self.components.extend(other.components)
+        else:
+            raise TypeError("Must add a valid Tolerance component or Chain")
+        return self
 
     def add_dimension(self, dim):
-        self.dimensions.append(dim)
+        self += dim
 
     def __add__(self, other):
         new_chain = ToleranceChain(name=self.name)
-        new_chain.dimensions = self.dimensions.copy()
-        new_chain.add_dimension(other)
+        new_chain.components = self.components.copy()
+        new_chain += other
         return new_chain
 
     def __getitem__(self, key):
         sub_chain = ToleranceChain(name=f"{self.name}_SubChain")
         if isinstance(key, slice):
-            sub_chain.dimensions = self.dimensions[key]
+            sub_chain.components = self.components[key]
         elif isinstance(key, list):
-            sub_chain.dimensions = [self.dimensions[i] for i in key]
+            sub_chain.components = [self.components[i] for i in key]
         elif isinstance(key, int):
-            sub_chain.dimensions = [self.dimensions[key]]
+            sub_chain.components = [self.components[key]]
         else:
             raise TypeError("Invalid index type")
         return sub_chain
 
     def filter_by(self, **kwargs):
         sub_chain = ToleranceChain(name=f"{self.name}_Filtered")
-        for dim in self.dimensions:
+        for dim in self.components:
             match = True
             for k, v in kwargs.items():
                 if getattr(dim, k, None) != v:
                     match = False
                     break
             if match:
-                sub_chain.add_dimension(dim)
+                sub_chain += dim
         return sub_chain
 
     def get_nominal_gap(self):
-        gap_vector = np.zeros(3)
-        for dim in self.dimensions:
-            gap_vector += dim.nominal_vector
-        return gap_vector
+        return calculate_loop(self.components)
 
     def check_closure(self, tolerance=1e-5):
         gap_vec = self.get_nominal_gap()
@@ -62,13 +76,11 @@ class ToleranceChain:
     def get_endpoints(self, size=100000, mode='theory', condition='perfect', label=None):
         current_positions = np.zeros((size, 3))
 
-        # We handle 3D rotations, but for simplicity primarily z-axis rotations here
-        # Advanced implementations would use a 3x3 rotation matrix
         current_angles_rad_x = np.zeros(size)
         current_angles_rad_y = np.zeros(size)
         current_angles_rad_z = np.zeros(size)
 
-        for item in self.dimensions:
+        for item in self.components:
             if hasattr(item, 'rvs_rad'):
                 rads = item.rvs_rad(size=size, mode=mode, condition=condition, label=label)
                 if getattr(item, 'axis', 'z') == 'z':
@@ -79,9 +91,11 @@ class ToleranceChain:
                     current_angles_rad_y += rads
             else:
                 length_samples = item.rvs(size=size, mode=mode, condition=condition, label=label)
+                if np.isscalar(length_samples):
+                    length_samples = np.full(size, length_samples)
+
                 base_vec = getattr(item, 'unit_vector', np.array([1., 0., 0.]))
 
-                # Assume rotation only around z for simplicity in this implementation
                 cos_a = np.cos(current_angles_rad_z)
                 sin_a = np.sin(current_angles_rad_z)
 
@@ -95,10 +109,13 @@ class ToleranceChain:
 
         return current_positions
 
-    def rvs(self, size=100000, target_dir='x', mode='theory', condition='perfect', label=None):
-        current_positions = self.get_endpoints(size, mode, condition, label)
+    def run_analysis(self, samples=100000, target_dir='x'):
         target_vec = parse_direction(direction=target_dir)
-        return current_positions.dot(target_vec)
+        return run_monte_carlo(self.components, samples, target_vec)
+
+    def rvs(self, size=100000, target_dir='x', mode='theory', condition='perfect', label=None):
+        """Maintains previous API compatible execution"""
+        return self.run_analysis(samples=size, target_dir=target_dir)
 
     def evaluate_angle_variation(self, plane='xy', size=100000, mode='theory', condition='perfect', label=None):
         nominal_vec = self.get_nominal_gap()
@@ -126,7 +143,7 @@ class ToleranceChain:
     def _get_active_dimensions(self, target_dir_input):
         target_vec = parse_direction(direction=target_dir_input)
         active_dims = []
-        for dim in self.dimensions:
+        for dim in self.components:
             if hasattr(dim, 'rvs_rad'): # skip rotation
                 continue
             unit_vec = getattr(dim, 'unit_vector', parse_direction(direction=getattr(dim, 'direction', 'x')))
@@ -177,7 +194,7 @@ class ToleranceChain:
         top_dim_name = pareto_df.iloc[0]['Dimension']
         contribution = pareto_df.iloc[0]['Contribution_%']
 
-        top_dim = next((dim for dim in self.dimensions if dim.name == top_dim_name), None)
+        top_dim = next((dim for dim in self.components if dim.name == top_dim_name), None)
 
         print(f"🔍 Optimization Target: [{top_dim_name}] (Contribution: {contribution:.1f}%)")
 
@@ -192,14 +209,7 @@ class ToleranceChain:
         return None
 
     def generate_report(self, spec=None):
-        all_records = []
-        for i, dim in enumerate(self.dimensions):
-            if hasattr(dim, 'compare_report'):
-                dim_records = dim.compare_report(spec=spec)
-                for r in dim_records:
-                    r['Chain_Index'] = i
-                all_records.extend(dim_records)
-        return pd.DataFrame(all_records)
+        return generate_dataframe(self.components, spec=spec)
 
     @classmethod
     def from_table(cls, name, columns, *rows):
@@ -243,3 +253,12 @@ class ToleranceChain:
             chain += TolClass(**kwargs)
 
         return chain
+
+    @property
+    def dimensions(self):
+        """Backward compatibility for existing tests."""
+        return self.components
+
+    @dimensions.setter
+    def dimensions(self, val):
+        self.components = val

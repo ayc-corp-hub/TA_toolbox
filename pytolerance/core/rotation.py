@@ -1,13 +1,15 @@
 import numpy as np
 from scipy import stats
+from .base import AbstractTol
+from ..engine.backend import xp
 
-class RotationTol:
+class RotationTol(AbstractTol):
     def __init__(self, name="Unnamed_Rotation", axis='z', **kwargs):
         """
         Handles pure angular variation (e.g., CNC rotary axis, fixture tilt).
         axis: 'x', 'y', or 'z'
         """
-        self.name = name
+        super().__init__(name)
         self.axis = axis.lower()
         self.type = kwargs.get('type', 'Rotary_Axis')
         self.vendor = kwargs.get('vendor', 'Internal')
@@ -26,8 +28,8 @@ class RotationTol:
         # Rotation doesn't translate
         return np.array([0., 0., 0.])
 
-    def toggle_variation(self, state: bool):
-        self.ignore_variation = not state
+    def rvs(self, size=1, mode='theory', label=None, condition='perfect'):
+        return self.rvs_rad(size, mode, condition, label)
 
     def rvs_rad(self, size=1, mode='theory', condition='perfect', label=None):
         """Generates random angle samples in radians."""

@@ -1,15 +1,13 @@
-from .utils import parse_direction
-from .dimension import DimensionTol
-from .geometric import GeometricTol
-from .rotation import RotationTol
-from .assembly import AssemblyPlayTol
-from .chain import ToleranceChain
+from .core.chain import ToleranceChain
+from .core.dimension import DimensionTol
+from .core.geometric import GeometricTol
+from .core.rotation import RotationTol
+from .core.assembly import AssemblyPlayTol
 
 __all__ = [
-    'parse_direction',
+    'ToleranceChain',
     'DimensionTol',
     'GeometricTol',
     'RotationTol',
-    'AssemblyPlayTol',
-    'ToleranceChain'
+    'AssemblyPlayTol'
 ]

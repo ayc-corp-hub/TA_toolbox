@@ -1,13 +1,16 @@
 import numpy as np
-import pandas as pd
 from scipy import stats
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
-from .utils import parse_direction
 
-class DimensionTol:
+from ..utils.math_utils import parse_direction
+from .base import AbstractTol
+from ..engine.backend import xp
+from ..engine.statistics import get_effective_params, calculate_dpmo
+
+class DimensionTol(AbstractTol):
     def __init__(self, name="Unnamed_Dim", **kwargs):
-        self.name = name
+        super().__init__(name)
 
         # 1. Vector and direction setting
         self.unit_vector = parse_direction(
@@ -89,53 +92,10 @@ class DimensionTol:
         }
 
     def _get_effective_params(self, mode='theory', label=None, condition='perfect', spec=None):
-        usl = max(spec) if spec else self.usl
-        lsl = min(spec) if spec else self.lsl
-        tolerance = (usl - lsl) if (usl is not None and lsl is not None) else (6 * max(self.theory_stdev, 1e-9))
-
-        sigma_ms = (self.grr * tolerance) / 6.0 if self.grr > 0 else 0.0
-
-        if mode == 'theory':
-            mean = self.theory_mean
-            stdev = self.theory_stdev
-
-            if condition == 'worst_case':
-                stdev = np.sqrt(stdev**2 + sigma_ms**2)
-                shift_val = self.process_shift_sigma * stdev
-                if usl is not None and lsl is not None:
-                    direction = 1 if (usl - mean) < (mean - lsl) else -1
-                    mean += direction * shift_val
-                else:
-                    mean += shift_val
-
-        elif mode == 'actual':
-            if not self.actual_profiles:
-                raise ValueError(f"Dimension {self.name} has no actual data. Add data using add_data().")
-            if label is None:
-                label = list(self.actual_profiles.keys())[-1]
-            p = self.actual_profiles[label]
-            mean, stdev, n = p['mean'], p['stdev'], p['n']
-
-            if condition == 'perfect' and self.grr > 0:
-                stdev = np.sqrt(max(1e-9, stdev**2 - sigma_ms**2))
-            elif condition == 'worst_case':
-                if n > 1:
-                    t_val = stats.t.ppf(1 - self.alpha/2, df=n-1)
-                    margin_of_error = t_val * (stdev / np.sqrt(n))
-
-                    if usl is not None and lsl is not None:
-                        direction = 1 if (usl - mean) < (mean - lsl) else -1
-                        mean += direction * margin_of_error
-                    else:
-                        mean += margin_of_error
-
-                    chi2_val = stats.chi2.ppf(self.alpha/2, df=n-1)
-                    stdev = np.sqrt((n - 1) * (stdev**2) / chi2_val)
-
-        return mean, stdev
+        return get_effective_params(self, mode, label, condition, spec)
 
     def _build_dist(self, mode, label, condition, spec):
-        eff_mean, eff_stdev = self._get_effective_params(mode, label, condition, spec)
+        eff_mean, eff_stdev = get_effective_params(self, mode, label, condition, spec)
         if eff_stdev <= 1e-9:
             # Degenerate distribution (constant)
             return type('ConstantDist', (), {'pdf': lambda self, x: np.where(np.isclose(x, eff_mean), np.inf, 0),
@@ -210,14 +170,7 @@ class DimensionTol:
         return samples
 
     def DPMO(self, spec=None, mode='theory', label=None, condition='perfect'):
-        usl = max(spec) if spec else self.usl
-        lsl = min(spec) if spec else self.lsl
-
-        prob_defect = 0.0
-        if usl is not None: prob_defect += (1.0 - self.cdf(usl, mode, label, condition, spec))
-        if lsl is not None: prob_defect += self.cdf(lsl, mode, label, condition, spec)
-
-        return prob_defect * 1_000_000
+        return calculate_dpmo(self, spec, mode, label, condition)
 
     def get_cpk(self, mean, stdev, spec=None):
         usl = max(spec) if spec else self.usl

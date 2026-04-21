@@ -1,14 +1,15 @@
 import numpy as np
+from .base import AbstractTol
+from ..engine.backend import xp
 
-class AssemblyPlayTol:
+class AssemblyPlayTol(AbstractTol):
     def __init__(self, name="Assembly_Play", axis='z', **kwargs):
         """
         Simulates random rotation error caused by assembly clearance (Kinematic Play).
         """
-        self.name = name
+        super().__init__(name)
         self.axis = axis.lower()
         self.type = 'Assembly_Clearance'
-        self.ignore_variation = kwargs.get('ignore_variation', False)
 
         self.outer_W = kwargs.get('outer_W')
         self.outer_L = kwargs.get('outer_L')
@@ -22,8 +23,8 @@ class AssemblyPlayTol:
     def nominal_vector(self):
         return np.array([0., 0., 0.])
 
-    def toggle_variation(self, state: bool):
-        self.ignore_variation = not state
+    def rvs(self, size=1, mode='theory', label=None, condition='perfect'):
+        return self.rvs_rad(size, mode, condition, label)
 
     def rvs_rad(self, size=1, mode='theory', condition='perfect', label=None):
         """
